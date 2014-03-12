@@ -28,6 +28,9 @@ const word_hdr_t *WP = NULL;
 
 const word_hdr_t *g_natives;
 
+#define TRUE -1   // all 1s
+#define FALSE 0   // all 0s
+
 #define LITERAL(N) ((_t) N)
 #define LABEL(N) ((_t) &&N)
 #define FUNCTION(F) ((_t) (&F))
@@ -68,10 +71,11 @@ int main()
 
 #define XT_BRANCH(N) (&s_natives[0]), ((void *) N)
 #define XT_INTERPRET (&s_natives[1])
+#define XT_EXIT (&s_natives[2])
 
     // : QUIT  BEGIN INTERPRET AGAIN ; => INTERPRET BRANCH(-3) EXIT
     static const word_hdr_t *QUIT[] =
-        { XT_INTERPRET, XT_BRANCH(-3), 0 };
+        { XT_INTERPRET, XT_BRANCH(-3), XT_EXIT };
 
     g_natives = s_natives;
     IP = QUIT;
@@ -80,11 +84,9 @@ int main()
 
 NEXT:
     WP = *IP++;
-
-    if (! WP) {
-        return 0;
-    }
-
+    // fall-through
+ 
+DO_WORD:
     if (WP->isfunc) {
         (WP->codeptr)();
         goto NEXT;
@@ -107,8 +109,7 @@ PRINT:
 
 EXECUTE:
     WP = (word_hdr_t *) POP();
-    (WP->codeptr)();
-    goto NEXT;
+    goto DO_WORD;
 
 INTERPRET:
     WORD();
@@ -145,16 +146,17 @@ void NUMBER()
     TOS = atoi((const char *) TOS);
 }
 
+// ( nameptr -- nameptr 0 | wordptr -1 )
 void FIND()
 {
     const word_hdr_t *natives = g_natives;
     PUSH(TOS);
-    TOS = 0; // FALSE
+    TOS = FALSE;
     int i;
     for (i=0; natives[i].name[0]; ++i) {
         if (strcmp(*SP, natives[i].name) == 0) {
             *SP = (_t) &natives[i];
-            TOS = -1; // TRUE
+            TOS = TRUE;
             break;
         }
     }
