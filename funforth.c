@@ -5,11 +5,12 @@
 
 typedef int64_t _t;
 
-char input[] = "2 4 + . ;";
+char input[] = "2 4 + . ABORT";
 
-_t   data[32];
-char heap[128];
-char dict[128];
+_t    argstack[32];
+void *retstack[32];
+char  heap[128];
+char  dict[128];
 
 typedef void (*voidfunc_t)();
 typedef struct word_hdr_t
@@ -20,29 +21,29 @@ typedef struct word_hdr_t
     const struct word_hdr_t **body;
 } word_hdr_t;
 
-        _t *SP = data;
-const word_hdr_t **IP = 0;
-const char *CP = input;
-      char *HP = heap;
-const word_hdr_t *WP = NULL;
-        _t TOS = 0;
+      _t            TOS = 0;
+      _t           *SP = argstack;
+      void *       *RP = retstack;
+const word_hdr_t * *IP = NULL;
+const char *        CP = input;
+      char *        HP = heap;
+const word_hdr_t *  WP = NULL;
 
-const word_hdr_t *g_natives;
+// array of native labels and functions
+const word_hdr_t   *g_natives;
 
 #define TRUE -1   // all 1s
 #define FALSE 0   // all 0s
 
-#define LITERAL(N) ((_t) N)
-#define LABEL(N) ((_t) &&N)
-#define FUNCTION(F) ((_t) (&F))
-
-void QUIT();
 void FIND();
 void NUMBER();
 void WORD();
 
 #define POP() ({ _t r = TOS; TOS = *SP--; r; })
 #define PUSH(v) { *++SP = TOS; TOS = (_t) v; }
+
+#define RPOP() (*RP--)
+#define RPUSH(v) { *++RP = (void *) v;}
 
 int main()
 {
@@ -62,6 +63,7 @@ int main()
         NATIVE_LABEL("+", ADD)
         NATIVE_LABEL(".", PRINT)
         NATIVE_LABEL("(LITERAL)", DO_LITERAL)
+        NATIVE_LABEL("ABORT", ABORT)
 
         NATIVE_FUNC("NUMBER", NUMBER)
         NATIVE_FUNC("FIND", FIND)
@@ -74,9 +76,9 @@ int main()
 #define XT_BRANCHZ(N) (&s_natives[1]), ((void *) N)
 #define XT_EXECUTE (&s_natives[2])
 #define XT_EXIT (&s_natives[3])
-#define XT_NUMBER (&s_natives[7])
-#define XT_FIND (&s_natives[8])
-#define XT_WORD (&s_natives[9])
+#define XT_NUMBER (&s_natives[8])
+#define XT_FIND (&s_natives[9])
+#define XT_WORD (&s_natives[10])
 
     //  : INTERPRET  WORD FIND IF EXECUTE ELSE NUMBER THEN ;
     // =>  [ WORD FIND BRANCHZ(+2) EXECUTE EXIT NUMBER EXIT ]
@@ -144,10 +146,15 @@ DO_BRANCHZ:
     goto NEXT;
 
 DO_ENTER:
+    RPUSH(IP);
     IP = WP->body;
     goto NEXT;
 
 EXIT:
+    IP = RPOP();
+    goto NEXT;
+
+ABORT:
     return 0;
 }
 
