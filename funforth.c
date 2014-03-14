@@ -3,9 +3,10 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <stdarg.h>
 
-char input[] = " 2 4 + . ABORT";
+char input[] = " 2 4 + . : 1+ 1 + ; 4 1+ 1+ . ABORT ";
 
 typedef int64_t _t;
 
@@ -19,6 +20,7 @@ typedef struct word_hdr_t
     voidfunc_t codeptr;
     struct word_hdr_t *prev;
     unsigned isfunc : 1;
+    unsigned immed : 1;
     char name[19]; 
     void *body;
 } word_hdr_t;
@@ -27,7 +29,7 @@ typedef struct word_hdr_t
       _t           argstack[32];
       void *       retstack[32];
       char         heap[1024];
-      char         dict[1024];
+      char         dict[102400];
 // ------------------------------
       _t           TOS = 0;
       _t           *SP = argstack;
@@ -40,9 +42,10 @@ const word_hdr_t *  WP = NULL;
       char *        DP = dict;
 
       word_hdr_t *  LATEST = NULL;
-      int           STATE = FALSE;
+      int           COMPILING = FALSE;
 // ===============================
 
+#define SWAP() { _t r = TOS; TOS = *SP; *SP = r; }
 #define POP() ({ _t r = TOS; TOS = *SP--; r; })
 #define PUSH(v) { *++SP = TOS; TOS = (_t) v; }
 
@@ -105,10 +108,12 @@ void DOES_FORTH(const char *junk, ...)
     const word_hdr_t * XT_##CFUNC = DO_CREATE(FORTHTOK); \
     DOES_C(&CFUNC);
 
-#define BUILTIN_WORD(FORTHTOK, args...) \
-    const word_hdr_t * XT_##FORTHTOK = DO_CREATE(#FORTHTOK); \
+#define BUILTIN_WORD(FORTHTOK, CTOK, args...) \
+    const word_hdr_t * XT_##CTOK = DO_CREATE(FORTHTOK); \
     _DOES(&&DO_ENTER); \
     DOES_FORTH("", args, NULL);
+
+#define IMMEDIATE   LATEST->immed = 1
 
 #define JMP(OFFSET) XT_DO_BRANCH, ((void *) OFFSET)
 #define JMPZ(OFFSET) XT_DO_BRANCHZ, ((void *) OFFSET)
@@ -131,6 +136,7 @@ int main()
     NATIVE_LABEL("]", SETCOMPILE)
     NATIVE_LABEL("[", CLEARCOMPILE)
     NATIVE_LABEL("HERE", HERE)
+    NATIVE_LABEL("INTERPRET", INTERPRET)
     NATIVE_LABEL(">BODY", SETBODY)
     // ... ~20 more ...
 
@@ -140,23 +146,20 @@ int main()
     NATIVE_FUNC("FIND", FIND)
     NATIVE_FUNC("WORD", WORD)
     NATIVE_FUNC(".", PRINT)
-//    NATIVE_FUNC(":", COLON)
-//    IMMED_FUNC(";", SEMICOLON)
-
-    //  : INTERPRET  WORD FIND IF EXECUTE ELSE NUMBER THEN ;
-    // =>  [ WORD FIND BRANCHZ(+2) EXECUTE EXIT NUMBER EXIT ]
-    BUILTIN_WORD(INTERPRET, 
-            XT_WORD, XT_FIND, 
-            JMPZ(+2), XT_EXECUTE, XT_EXIT,
-            XT_NUMBER, XT_EXIT);
+    NATIVE_FUNC(",", COMMA)
 
     //  : QUIT  BEGIN INTERPRET AGAIN ;
-    // =>  [ INTERPRET BRANCH(-3) EXIT ]
-    BUILTIN_WORD(QUIT, XT_INTERPRET, JMP(-3), XT_EXIT);
+    BUILTIN_WORD("QUIT", QUIT,
+            XT_INTERPRET, JMP(-3), XT_EXIT);
 
-    BUILTIN_WORD(COLON, XT_WORD, XT_CREATE, XT_DOES, XT_DO_ENTER,
-                        XT_SETCOMPILE, XT_HERE, XT_SETBODY, XT_EXIT); 
+    //  : : WORD CREATE DOES> DO_ENTER HERE >BODY ] ;
+    BUILTIN_WORD(":", COLON,
+            XT_WORD, XT_CREATE, XT_DO_LITERAL, XT_DO_ENTER, XT_DOES,
+            XT_HERE, XT_SETBODY, XT_SETCOMPILE, XT_EXIT); 
 
+    BUILTIN_WORD(";", SEMICOLON,
+            XT_DO_LITERAL, XT_EXIT, XT_COMMA, 
+            XT_CLEARCOMPILE, XT_EXIT); IMMEDIATE;
     // -----
 
     IP = XT_QUIT->body;
@@ -166,6 +169,8 @@ int main()
 NEXT:    WP = *IP++; // fall-through
  
 DO_WORD:
+    if (WP == NULL) goto ABORT;
+
 //    printf("%s\n", WP->name);
 
     if (WP->isfunc) {
@@ -179,6 +184,28 @@ EXECUTE:
     WP = (word_hdr_t *) POP();
     goto DO_WORD;
 
+INTERPRET:
+        WORD();
+        FIND();
+        if (TOS == 0) { // not found, try to convert to number
+            POP();
+            NUMBER();
+            if (COMPILING) {
+                comma((_t) XT_DO_LITERAL);
+                comma(POP());
+            } 
+            goto NEXT;
+        } 
+
+        if (POP() > 0) { //  not-immediate
+            if (COMPILING) {
+                comma(POP());
+                goto NEXT;
+            }
+        }
+
+        goto EXECUTE;
+
 DO_LITERAL:   PUSH(*IP++);                                           goto NEXT;
 DO_CONSTANT:  PUSH(*(const _t *) WP->body);                          goto NEXT;
 DO_VARIABLE:  PUSH(WP->body);                                        goto NEXT;
@@ -190,12 +217,22 @@ EXIT:         IP = RPOP();                                           goto NEXT;
 
 ADD:          TOS += *SP--;                                          goto NEXT;
 
-SETCOMPILE:   STATE = TRUE;                                          goto NEXT;
-CLEARCOMPILE: STATE = FALSE;                                         goto NEXT;
+SETCOMPILE:   COMPILING = TRUE;                                      goto NEXT;
+CLEARCOMPILE: COMPILING = FALSE;                                     goto NEXT;
 SETBODY:      LATEST->body = (void *) POP();                         goto NEXT;
 HERE:         PUSH(DP);                                              goto NEXT;
 
-ABORT:        return 0;
+ABORT:        
+    while (SP != argstack) {
+        printf("SP[%d] %d\n", (int) (SP - argstack), (int) POP());
+    }
+    while (RP != retstack) {
+        printf("RP[%d] %p\n", (int) (RP - retstack), RPOP());
+    }
+//    for (WP = LATEST; WP; WP = WP->prev) printf("%s\n", WP->name);
+    // IP, CP, HP, WP, DP
+
+    return 0;
 }
 
 void WORD()
@@ -211,22 +248,26 @@ void WORD()
 
 void NUMBER()
 {
-    TOS = atoi((const char *) TOS);
+    char *endptr = NULL;
+    const char *s = (const char *) TOS;
+    TOS = strtoll(s, (char **) endptr, 0);
+    if (s == endptr) {
+        printf("'%s' not found\n", s);
+        abort();
+    }
 }
 
 // ( nameptr -- nameptr 0 | wordptr -1 )
 void FIND()
 {
-    const word_hdr_t *w;
-
-    for (w = LATEST; w; w = w->prev) {
-        if (strcmp((const char *) TOS, w->name) == 0) {
-            TOS = (_t) w;
-            PUSH(TRUE);
+    for (WP = LATEST; WP; WP = WP->prev) {
+        if (strcmp((const char *) TOS, WP->name) == 0) {
+            TOS = (_t) WP;
+            PUSH(WP->immed ? -1 : 1);
             return;
         }
     }
-    PUSH(FALSE);
+    PUSH(0);
 }
 
 void PRINT(void)
@@ -237,6 +278,11 @@ void PRINT(void)
 void CREATE(void)
 {
     DO_CREATE((const char *) POP());
+}
+
+void COMMA(void)
+{
+    comma(POP());
 }
 
 void DOES(void)
