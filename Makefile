@@ -1,5 +1,7 @@
 
-CFLAGS= -ggdb -O3
+CFLAGS= -ggdb 
+#CFLAGS= -O3
+#CFLAGS+= -DDEBUG
 
 all: test funforth.s
 
