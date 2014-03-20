@@ -1,9 +1,10 @@
 
 CFLAGS= -ggdb 
-#CFLAGS= -O3
 
 ifdef DEBUG
 CFLAGS+= -DDEBUG
+else
+CFLAGS+= -O3
 endif
 
 all: test funforth.s
@@ -18,4 +19,4 @@ test: funforth
 	gcc $(CFLAGS) -S $< -o $@
 
 clean:
-	rm funforth funforth.s
+	rm -f funforth funforth.s

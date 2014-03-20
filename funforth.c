@@ -5,15 +5,22 @@
 #include <stdlib.h>
 #include <stdio.h>
 
+#define STRINGIFY(X) #X
+#define RESTRINGIFY(X) STRINGIFY(X)
+
+#define BLANK_CHAR 0
+
 char input[] =
     " : CELLS 8 * ;"
+    " : BL " RESTRINGIFY(BLANK_CHAR) " ;"
+    " : ( 41 WORD DROP ; IMMEDIATE"
     " : OFFSET   - 8 / 1 - ;"
     " : >MARK     1 CELLS ALLOT ;"
     " : >RESOLVE  DUP HERE SWAP OFFSET SWAP ! ;"
     " : <MARK     HERE ;"
     " : <RESOLVE  HERE OFFSET , ;"
-    " : [']  WORD FIND =0 ?ABORT LITERAL ; IMMEDIATE"
-    " : '    WORD FIND =0 ?ABORT ;"
+    " : [']  BL WORD FIND =0 ?ABORT LITERAL ; IMMEDIATE"
+    " : '    BL WORD FIND =0 ?ABORT ;"
     " : POSTPONE  ' LITERAL ['] , , ; IMMEDIATE"
     " : IF    POSTPONE BRANCHZ >MARK ; IMMEDIATE"
     " : ELSE  POSTPONE BRANCH  >MARK SWAP >RESOLVE ; IMMEDIATE"
@@ -115,14 +122,15 @@ void comma(const void * v)
     *ptr = v;
 }
 
-void DOES_FORTH(const char *junk, ...)
+#define END_BUILTIN ((void *) 1)
+void DOES_FORTH(void *delimiter, ...)
 {
     const word_hdr_t *w;
     LATEST->body = DP;
 
     va_list ap;
-    va_start(ap, junk);
-    while (w = va_arg(ap, const word_hdr_t *)) {
+    va_start(ap, delimiter);
+    while ((w = va_arg(ap, const word_hdr_t *)) != END_BUILTIN) {
         comma(w);
     }
     va_end(ap);
@@ -140,7 +148,7 @@ void DOES_FORTH(const char *junk, ...)
 #define BUILTIN_WORD(FORTHTOK, CTOK, args...) \
     const word_hdr_t * XT_##CTOK = DO_CREATE(FORTHTOK); \
     _DOES(&&DO_ENTER); \
-    DOES_FORTH("", args, NULL);
+    DOES_FORTH("", args, END_BUILTIN);
 
 #define MAKE_IMMEDIATE   LATEST->immed = 1
 #define HAS_PARM  LATEST->ip_parm = 1
@@ -164,7 +172,9 @@ int main()
     NATIVE_LABEL("*", MULT)
     NATIVE_LABEL("/", DIV)
     NATIVE_LABEL("DUP", DUP)
+    NATIVE_LABEL("DROP", DROP)
     NATIVE_LABEL("SWAP", SWAP)
+    NATIVE_LABEL("OVER", OVER)
     NATIVE_LABEL("!", STORE)
     NATIVE_LABEL("@", FETCH)
     NATIVE_LABEL("(LITERAL)", DO_LITERAL)   HAS_PARM;
@@ -201,8 +211,8 @@ int main()
     BUILTIN_WORD("QUIT", QUIT,
             XT_INTERPRET, JMP(-3), XT_EXIT);
 
-    //  : : WORD CREATE DOES> DO_ENTER HERE >BODY ] ;
-    BUILTIN_WORD(":", COLON,
+    //  : : BL WORD CREATE DOES> DO_ENTER HERE >BODY ] ;
+    BUILTIN_WORD(":", COLON, XT_DO_LITERAL, BLANK_CHAR,
             XT_WORD, XT_CREATE, XT_DO_LITERAL, XT_DO_ENTER, XT_DOES,
             XT_HERE, XT_SETBODY, XT_SETCOMPILE, XT_EXIT); 
 
@@ -240,8 +250,9 @@ DO_WORD:
 
     goto *(WP->codeptr);
 
-//  : INTERPRET  WORD FIND =0 IF NUMBER STATE @ IF ' DO_LITERAL , , THEN ELSE IF>0 STATE @ IF , EXIT ELSE EXECUTE THEN ;
+//  : INTERPRET  BL WORD FIND =0 IF NUMBER STATE @ IF ' DO_LITERAL , , THEN ELSE IF>0 STATE @ IF , EXIT ELSE EXECUTE THEN ;
 INTERPRET:
+        PUSH(BLANK_CHAR);
         WORD();
         FIND();
         if (TOS == 0) { // not found, try to convert to number
@@ -285,6 +296,8 @@ MULT:         TOS = *SP-- * TOS;                                     NEXT;
 DIV:          TOS = *SP-- / TOS;                                     NEXT;
 
 DUP:          PUSH(TOS);                                             NEXT;
+DROP:         POP();                                                 NEXT;
+OVER:         PUSH(SP[0]);                                           NEXT;
 SWAP:         acc = TOS; TOS = *SP; *SP = acc;                       NEXT;
 
 STORE:        *(_t *) TOS = *SP--; TOS = *SP--;                      NEXT;
@@ -308,14 +321,19 @@ QABORT:        if (POP()) { _ABORT(); }                              NEXT;
     return 0;
 }
 
-
 void WORD()
 {
+    char delim = POP();
     while (*CP && isspace(*CP)) CP++;
     PUSH(HP);
     char *tmp = HP;
-    while (*CP && !isspace(*CP)) {
-        *tmp++ = *CP++;
+    char ch;
+    while ((ch = *CP++)) {
+        if (((delim != BLANK_CHAR) && (delim == ch)) || 
+                ((delim == BLANK_CHAR) && isspace(ch))) {
+            break;
+        }
+        *tmp++ = ch;
     }
     *tmp = 0;
     if (tmp == HP) { // empty word
