@@ -12,7 +12,8 @@ char input[] =
     " : >RESOLVE  DUP HERE SWAP OFFSET SWAP ! ;"
     " : <MARK     HERE ;"
     " : <RESOLVE  HERE OFFSET , ;"
-    " : LITERAL   ['] (LITERAL) , , ;"
+    " : [']  WORD FIND =0 ?ABORT LITERAL ; IMMEDIATE"
+    " : '    WORD FIND =0 ?ABORT ;"
     " : POSTPONE  ' LITERAL ['] , , ; IMMEDIATE"
     " : IF    POSTPONE BRANCHZ >MARK ; IMMEDIATE"
     " : ELSE  POSTPONE BRANCH  >MARK SWAP >RESOLVE ; IMMEDIATE"
@@ -157,6 +158,7 @@ int main()
     NATIVE_LABEL("BRANCH", DO_BRANCH)   HAS_PARM;
     NATIVE_LABEL("BRANCHZ", DO_BRANCHZ)   HAS_PARM;
     NATIVE_LABEL("EXECUTE", EXECUTE)
+    NATIVE_LABEL("=0", EQ0)
     NATIVE_LABEL("+", ADD)
     NATIVE_LABEL("-", SUB)
     NATIVE_LABEL("*", MULT)
@@ -170,7 +172,7 @@ int main()
     NATIVE_LABEL("(ENTER)", DO_ENTER)
     NATIVE_LABEL("EXIT", EXIT)
     NATIVE_LABEL("INTERPRET", INTERPRET)
-    NATIVE_LABEL("QABORT", QABORT)
+    NATIVE_LABEL("?ABORT", QABORT)
 
     NATIVE_LABEL("ALLOT", ALLOT)
 
@@ -183,8 +185,7 @@ int main()
     NATIVE_LABEL("IMMEDIATE", IMMEDIATE)
     NATIVE_LABEL(",", COMMA)
     NATIVE_LABEL("HERE", HERE)
-    NATIVE_LABEL("'", TICK)
-    NATIVE_LABEL("[']", COMPILE_TICK) MAKE_IMMEDIATE;
+    NATIVE_LABEL("LITERAL", LITERAL)
 #endif
 
     NATIVE_FUNC(".DICT", PRINTDICT)
@@ -276,6 +277,8 @@ DO_BRANCHZ:   DPRINTF("JMPZ(%+d)\n", *(int *) IP);
 DO_ENTER:     RPUSH(IP); IP = WP->body;                              NEXT;
 EXIT:         IP = RPOP();                                           NEXT;
 
+EQ0:          TOS = (TOS == 0);                                      NEXT;
+
 ADD:          TOS = *SP-- + TOS;                                     NEXT;
 SUB:          TOS = *SP-- - TOS;                                     NEXT;
 MULT:         TOS = *SP-- * TOS;                                     NEXT;
@@ -297,26 +300,10 @@ HERE:         PUSH(DP);                                              NEXT;
 CREATE:       DO_CREATE((const char *) POP());                       NEXT;
 COMMA:        comma((void *) POP());                                 NEXT;
 DOES:         _DOES(((const word_hdr_t *) POP())->codeptr);          NEXT;
-
-// : [']  WORD FIND 0= ?ABORT LITERAL ; IMMEDIATE
-// : '  WORD FIND 0= ?ABORT ;
-TICK:
-              WORD(); FIND();
-              if (! POP()) {
-                  _ABORT();
-              }
-              NEXT;
-
-COMPILE_TICK: WORD(); FIND();
-              if (! POP()) {
-                  _ABORT();
-              }
-              comma(XT_DO_LITERAL);
-              comma((void *) POP());
-              NEXT;
+LITERAL:      comma(XT_DO_LITERAL); comma((void *) POP());           NEXT;
 #endif
 
-QABORT:        if (POP()) { ABORT("?ABORT"); }
+QABORT:        if (POP()) { _ABORT(); }                              NEXT;
 
     return 0;
 }
@@ -335,6 +322,7 @@ void WORD()
         DPRINTF("[eof]\n");
         exit(0);
     }
+    DPRINTF(">>        %s\n", HP);
 }
 
 void NUMBER()
@@ -402,7 +390,7 @@ void PRINTDICT(void)
             printf(" %s", (*w)->name);
             if ((*w)->ip_parm) {
                 ++w;
-                printf("(%d) ", (int) (*w));
+                printf("(%d) ", *(int *) w);
             }
         }
         printf(" ; \n");
