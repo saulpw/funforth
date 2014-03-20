@@ -1,7 +1,10 @@
 
 CFLAGS= -ggdb 
 #CFLAGS= -O3
-#CFLAGS+= -DDEBUG
+
+ifdef DEBUG
+CFLAGS+= -DDEBUG
+endif
 
 all: test funforth.s
 

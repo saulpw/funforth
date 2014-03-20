@@ -5,18 +5,15 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-#ifdef DEBUG
-#define DPRINTF printf
-#else
-#define DPRINTF(...)
-#endif
-
-char input[] = //" 2 4 + : 1+ 1 + ; 4 1+ 1+ .S "
+char input[] =
     " : CELLS 8 * ;"
+    " : OFFSET   - 8 / 1 - ;"
     " : >MARK     1 CELLS ALLOT ;"
-    " : >RESOLVE  DUP HERE SWAP - 8 / 1 - SWAP ! ;"
+    " : >RESOLVE  DUP HERE SWAP OFFSET SWAP ! ;"
     " : <MARK     HERE ;"
-    " : <RESOLVE  HERE - 8 / 1 - , ;"
+    " : <RESOLVE  HERE OFFSET , ;"
+    " : LITERAL   ['] (LITERAL) , , ;"
+    " : POSTPONE  ' LITERAL ['] , , ; IMMEDIATE"
     " : IF    POSTPONE BRANCHZ >MARK ; IMMEDIATE"
     " : ELSE  POSTPONE BRANCH  >MARK SWAP >RESOLVE ; IMMEDIATE"
     " : THEN  >RESOLVE ; IMMEDIATE"
@@ -40,6 +37,7 @@ typedef struct word_hdr_t
     struct word_hdr_t *prev;
     unsigned isfunc : 1;
     unsigned immed : 1;
+    unsigned ip_parm : 1; // if the cell this wordptr has a parm
     char name[19]; 
     void *body;
 } word_hdr_t;
@@ -73,7 +71,14 @@ const word_hdr_t *  WP = NULL;
 #define RPOP() (*RP--)
 #define RPUSH(v) { *++RP = (void *) v;}
 
-void ABORT(void);
+#ifdef DEBUG
+#define DPRINTF printf
+#else
+#define DPRINTF(...)
+#endif
+
+#define ABORT(MSG) PUSH(MSG); _ABORT();
+void _ABORT(void);
 
 void *ALLOT(int nbytes)
 {
@@ -137,9 +142,11 @@ void DOES_FORTH(const char *junk, ...)
     DOES_FORTH("", args, NULL);
 
 #define MAKE_IMMEDIATE   LATEST->immed = 1
+#define HAS_PARM  LATEST->ip_parm = 1
 
 #define JMP(OFFSET) XT_DO_BRANCH, ((void *) (OFFSET))
 #define JMPZ(OFFSET) XT_DO_BRANCHZ, ((void *) (OFFSET))
+
 
 int main()
 {
@@ -147,8 +154,8 @@ int main()
     printf("sizeof(_t) == %d, sizeof(word_hdr_t) == %d\n",
                 (int) sizeof(_t), (int) sizeof(word_hdr_t));
 
-    NATIVE_LABEL("BRANCH", DO_BRANCH)
-    NATIVE_LABEL("BRANCHZ", DO_BRANCHZ)
+    NATIVE_LABEL("BRANCH", DO_BRANCH)   HAS_PARM;
+    NATIVE_LABEL("BRANCHZ", DO_BRANCHZ)   HAS_PARM;
     NATIVE_LABEL("EXECUTE", EXECUTE)
     NATIVE_LABEL("+", ADD)
     NATIVE_LABEL("-", SUB)
@@ -158,7 +165,7 @@ int main()
     NATIVE_LABEL("SWAP", SWAP)
     NATIVE_LABEL("!", STORE)
     NATIVE_LABEL("@", FETCH)
-    NATIVE_LABEL("(LITERAL)", DO_LITERAL)
+    NATIVE_LABEL("(LITERAL)", DO_LITERAL)   HAS_PARM;
     NATIVE_LABEL("(CONSTANT)", DO_CONSTANT)
     NATIVE_LABEL("(ENTER)", DO_ENTER)
     NATIVE_LABEL("EXIT", EXIT)
@@ -176,11 +183,12 @@ int main()
     NATIVE_LABEL("IMMEDIATE", IMMEDIATE)
     NATIVE_LABEL(",", COMMA)
     NATIVE_LABEL("HERE", HERE)
-    NATIVE_LABEL("(POSTPONE)", DO_POSTPONE)
-    NATIVE_LABEL("POSTPONE", POSTPONE) MAKE_IMMEDIATE;
+    NATIVE_LABEL("'", TICK)
+    NATIVE_LABEL("[']", COMPILE_TICK) MAKE_IMMEDIATE;
 #endif
 
-    NATIVE_FUNC("ABORT", ABORT)
+    NATIVE_FUNC(".DICT", PRINTDICT)
+    NATIVE_FUNC("ABORT", _ABORT)
     NATIVE_FUNC("NUMBER", NUMBER)
     NATIVE_FUNC("FIND", FIND)
     NATIVE_FUNC("WORD", WORD)
@@ -206,9 +214,17 @@ int main()
 
     _t acc;
 
+#ifdef RELEASE
 #define NEXT goto _NEXT
+#else
+#define NEXT goto CHECK_STATE
 CHECK_STATE:
-    if (IP == NULL) goto QABORT;
+    if (IP == NULL) { ABORT("IP == NULL"); }
+    if (SP - argstack < 0) { ABORT("data stack underflow"); }
+    if (SP - argstack > sizeof(argstack)/sizeof(argstack[0])) { ABORT("data stack overflow"); }
+    if (RP - retstack < 0) { ABORT("return stack underflow"); }
+    if (RP - retstack > sizeof(retstack)/sizeof(retstack[0])) { ABORT("return stack overflow"); }
+#endif
 
 _NEXT:    
     WP = *IP++; // fall-through
@@ -253,9 +269,9 @@ DO_LITERAL:   PUSH(*IP++);                                           NEXT;
 DO_CONSTANT:  PUSH(*(const _t *) WP->body);                          NEXT;
 DO_VARIABLE:  PUSH(WP->body);                                        NEXT;
 
-DO_BRANCH:    DPRINTF("JMP(%+d)\n", *IP);
+DO_BRANCH:    DPRINTF("JMP(%+d)\n", *(int *) IP);
               acc = (_t) *IP++; IP += acc;                           NEXT;
-DO_BRANCHZ:   DPRINTF("JMPZ(%+d)\n", *IP);
+DO_BRANCHZ:   DPRINTF("JMPZ(%+d)\n", *(int *) IP);
               acc = (_t) *IP++; if (POP() == FALSE) { IP += acc; }   NEXT;
 DO_ENTER:     RPUSH(IP); IP = WP->body;                              NEXT;
 EXIT:         IP = RPOP();                                           NEXT;
@@ -268,7 +284,7 @@ DIV:          TOS = *SP-- / TOS;                                     NEXT;
 DUP:          PUSH(TOS);                                             NEXT;
 SWAP:         acc = TOS; TOS = *SP; *SP = acc;                       NEXT;
 
-STORE:        *(_t *) TOS = *SP; TOS = SP[-1]; SP -= 2;              NEXT;
+STORE:        *(_t *) TOS = *SP--; TOS = *SP--;                      NEXT;
 FETCH:        TOS = *(_t *) TOS;                                     NEXT;
 ALLOT:        TOS = (_t) ALLOT(TOS);                                 NEXT;
 
@@ -280,21 +296,27 @@ IMMEDIATE:    LATEST->immed = 1;                                     NEXT;
 HERE:         PUSH(DP);                                              NEXT;
 CREATE:       DO_CREATE((const char *) POP());                       NEXT;
 COMMA:        comma((void *) POP());                                 NEXT;
-DO_POSTPONE:  comma(*IP++);                                          NEXT;
 DOES:         _DOES(((const word_hdr_t *) POP())->codeptr);          NEXT;
 
-// : POSTPONE  WORD FIND 0= ?ABORT , ; IMMEDIATE
-POSTPONE:     WORD(); FIND();
+// : [']  WORD FIND 0= ?ABORT LITERAL ; IMMEDIATE
+// : '  WORD FIND 0= ?ABORT ;
+TICK:
+              WORD(); FIND();
               if (! POP()) {
-                  ABORT();
-              } else {
-                  comma(XT_DO_POSTPONE);
-                  comma((void *) POP());
+                  _ABORT();
               }
+              NEXT;
+
+COMPILE_TICK: WORD(); FIND();
+              if (! POP()) {
+                  _ABORT();
+              }
+              comma(XT_DO_LITERAL);
+              comma((void *) POP());
               NEXT;
 #endif
 
-QABORT:        if (POP()) { ABORT(); }
+QABORT:        if (POP()) { ABORT("?ABORT"); }
 
     return 0;
 }
@@ -310,7 +332,7 @@ void WORD()
     }
     *tmp = 0;
     if (tmp == HP) { // empty word
-        printf("[end]\n");
+        DPRINTF("[eof]\n");
         exit(0);
     }
 }
@@ -321,8 +343,7 @@ void NUMBER()
     const char *s = (const char *) TOS;
     TOS = strtoll(s, &endptr, 0);
     if (s == endptr) { // actually if entire token isn't consumed
-        PUSH(s);
-        ABORT();
+        ABORT(s);
     }
 }
 
@@ -353,24 +374,38 @@ void PRINTSTACK(void)
 {
     _t *ptr = SP;
     printf("--SP[%d] %d\n", (int) (ptr - argstack), (int) TOS);
-    for (ptr = SP; ptr != argstack; --ptr) {
+    for (ptr = SP; ptr > argstack; --ptr) {
         printf("  SP[%d] %d\n", (int) (ptr - argstack - 1), (int) *ptr);
     }
     void **rptr;
-    for (rptr = RP; rptr != retstack; --rptr) {
+    for (rptr = RP; rptr > retstack; --rptr) {
         printf("  RP[%d] %p\n", (int) (rptr - retstack), *rptr);
     }
 
 }
 
-void ABORT(void)
+void _ABORT(void)
 {
     printf("ABORT: %s\n", (const char *) POP());
 
     PRINTSTACK();
 
-//    for (WP = LATEST; WP; WP = WP->prev) printf("%s\n", WP->name);
-
     abort();
+}
+
+void PRINTDICT(void)
+{
+    for (WP = LATEST; WP && !WP->isfunc; WP = WP->prev) {
+        printf(":VERBATIM %s ", WP->name);
+        const word_hdr_t **w;
+        for (w = WP->body; strcmp((*w)->name, "EXIT"); ++w) {
+            printf(" %s", (*w)->name);
+            if ((*w)->ip_parm) {
+                ++w;
+                printf("(%d) ", (int) (*w));
+            }
+        }
+        printf(" ; \n");
+    }
 }
 
