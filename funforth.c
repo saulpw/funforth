@@ -5,18 +5,22 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-#define STRINGIFY(X) #X
-#define RESTRINGIFY(X) STRINGIFY(X)
+#define NELEMS(X) (sizeof(X)/sizeof(X[0]))
+#ifdef DEBUG
+#define DPRINTF printf
+#else
+#define DPRINTF(...)
+#endif
 
-#define BLANK_CHAR 0
+#define BLANK_CHAR 32
 
 char input[] =
     " : CELLS 8 * ;"
-    " : BL " RESTRINGIFY(BLANK_CHAR) " ;"
+    " : BL 32 ;" // must match BLANK_CHAR
     " : ( 41 WORD DROP ; IMMEDIATE"
     " : OFFSET   - 8 / 1 - ;"
     " : >MARK     1 CELLS ALLOT ;"
-    " : >RESOLVE  DUP HERE SWAP OFFSET SWAP ! ;"
+    " : >RESOLVE  HERE OVER OFFSET SWAP ! ;"
     " : <MARK     HERE ;"
     " : <RESOLVE  HERE OFFSET , ;"
     " : [']  BL WORD FIND =0 ?ABORT LITERAL ; IMMEDIATE"
@@ -33,9 +37,6 @@ char input[] =
 ;
 
 typedef int64_t _t;
-
-#define TRUE -1   // all 1s
-#define FALSE 0   // all 0s
 
 typedef void (*voidfunc_t)();
 
@@ -54,7 +55,7 @@ typedef struct word_hdr_t
       _t           argstack[32];
       void *       retstack[32];
       char         heap[1024];
-      char         dict[102400];
+      char         dict[8192];
 // ------------------------------
       _t           TOS = 0;
       _t           *SP = argstack;
@@ -79,13 +80,7 @@ const word_hdr_t *  WP = NULL;
 #define RPOP() (*RP--)
 #define RPUSH(v) { *++RP = (void *) v;}
 
-#ifdef DEBUG
-#define DPRINTF printf
-#else
-#define DPRINTF(...)
-#endif
-
-#define ABORT(MSG) PUSH(MSG); _ABORT();
+#define ABORT(MSG) do { PUSH(MSG); _ABORT(); } while (0)
 void _ABORT(void);
 
 void *ALLOT(int nbytes)
@@ -122,7 +117,7 @@ void comma(const void * v)
     *ptr = v;
 }
 
-#define END_BUILTIN ((void *) 1)
+#define END_BUILTIN NULL
 void DOES_FORTH(void *delimiter, ...)
 {
     const word_hdr_t *w;
@@ -186,7 +181,7 @@ int main()
 
     NATIVE_LABEL("ALLOT", ALLOT)
 
-#ifndef NO_COMPILER
+    // -- compiler words
     NATIVE_LABEL("]", SETCOMPILE)
     NATIVE_LABEL("[", CLEARCOMPILE)
     NATIVE_LABEL(">BODY", SETBODY)
@@ -196,7 +191,7 @@ int main()
     NATIVE_LABEL(",", COMMA)
     NATIVE_LABEL("HERE", HERE)
     NATIVE_LABEL("LITERAL", LITERAL)
-#endif
+    // --
 
     NATIVE_FUNC(".DICT", PRINTDICT)
     NATIVE_FUNC("ABORT", _ABORT)
@@ -212,7 +207,7 @@ int main()
             XT_INTERPRET, JMP(-3), XT_EXIT);
 
     //  : : BL WORD CREATE DOES> DO_ENTER HERE >BODY ] ;
-    BUILTIN_WORD(":", COLON, XT_DO_LITERAL, BLANK_CHAR,
+    BUILTIN_WORD(":", COLON, XT_DO_LITERAL, (void *) BLANK_CHAR,
             XT_WORD, XT_CREATE, XT_DO_LITERAL, XT_DO_ENTER, XT_DOES,
             XT_HERE, XT_SETBODY, XT_SETCOMPILE, XT_EXIT); 
 
@@ -225,17 +220,13 @@ int main()
 
     _t acc;
 
-#ifdef RELEASE
-#define NEXT goto _NEXT
-#else
-#define NEXT goto CHECK_STATE
+#define NEXT goto CHECK_STATE  // goto _NEXT in release
 CHECK_STATE:
     if (IP == NULL) { ABORT("IP == NULL"); }
     if (SP - argstack < 0) { ABORT("data stack underflow"); }
-    if (SP - argstack > sizeof(argstack)/sizeof(argstack[0])) { ABORT("data stack overflow"); }
+    if (SP - argstack > NELEMS(argstack)) { ABORT("data stack overflow"); }
     if (RP - retstack < 0) { ABORT("return stack underflow"); }
-    if (RP - retstack > sizeof(retstack)/sizeof(retstack[0])) { ABORT("return stack overflow"); }
-#endif
+    if (RP - retstack > NELEMS(retstack)) { ABORT("return stack overflow"); }
 
 _NEXT:    
     WP = *IP++; // fall-through
@@ -250,7 +241,7 @@ DO_WORD:
 
     goto *(WP->codeptr);
 
-//  : INTERPRET  BL WORD FIND =0 IF NUMBER STATE @ IF ' DO_LITERAL , , THEN ELSE IF>0 STATE @ IF , EXIT ELSE EXECUTE THEN ;
+//  : INTERPRET  BL WORD FIND =0 IF NUMBER STATE @ IF LITERAL THEN ELSE IF>0 STATE @ IF , EXIT ELSE EXECUTE THEN ;
 INTERPRET:
         PUSH(BLANK_CHAR);
         WORD();
@@ -259,17 +250,16 @@ INTERPRET:
             POP();
             NUMBER();
             if (STATE == COMPILE_MODE) {
-                comma(XT_DO_LITERAL);
-                comma((void *) POP());
+                goto LITERAL;
             }
             NEXT;
         } else if (POP() > 0) { //  not-immediate
             if (STATE == COMPILE_MODE) {
-                comma((void *) POP());
-                NEXT;
+                goto COMMA;
             }
         }
 
+        // EXECUTE immediately if TOS <0 or if STATE != COMPILE_MODE
 //        goto EXECUTE;  // fall-through instead
 
 EXECUTE:
@@ -281,10 +271,8 @@ DO_LITERAL:   PUSH(*IP++);                                           NEXT;
 DO_CONSTANT:  PUSH(*(const _t *) WP->body);                          NEXT;
 DO_VARIABLE:  PUSH(WP->body);                                        NEXT;
 
-DO_BRANCH:    DPRINTF("JMP(%+d)\n", *(int *) IP);
-              acc = (_t) *IP++; IP += acc;                           NEXT;
-DO_BRANCHZ:   DPRINTF("JMPZ(%+d)\n", *(int *) IP);
-              acc = (_t) *IP++; if (POP() == FALSE) { IP += acc; }   NEXT;
+DO_BRANCH:    acc = (_t) *IP++; IP += acc;                           NEXT;
+DO_BRANCHZ:   acc = (_t) *IP++; if (POP() == 0) { IP += acc; }       NEXT;
 DO_ENTER:     RPUSH(IP); IP = WP->body;                              NEXT;
 EXIT:         IP = RPOP();                                           NEXT;
 
@@ -302,9 +290,8 @@ SWAP:         acc = TOS; TOS = *SP; *SP = acc;                       NEXT;
 
 STORE:        *(_t *) TOS = *SP--; TOS = *SP--;                      NEXT;
 FETCH:        TOS = *(_t *) TOS;                                     NEXT;
-ALLOT:        TOS = (_t) ALLOT(TOS);                                 NEXT;
 
-#ifndef NO_COMPILER
+ALLOT:        TOS = (_t) ALLOT(TOS);                                 NEXT;
 SETCOMPILE:   STATE = COMPILE_MODE;                                  NEXT;
 CLEARCOMPILE: STATE = INTERPRET_MODE;                                NEXT;
 SETBODY:      LATEST->body = (void *) POP();                         NEXT;
@@ -314,7 +301,6 @@ CREATE:       DO_CREATE((const char *) POP());                       NEXT;
 COMMA:        comma((void *) POP());                                 NEXT;
 DOES:         _DOES(((const word_hdr_t *) POP())->codeptr);          NEXT;
 LITERAL:      comma(XT_DO_LITERAL); comma((void *) POP());           NEXT;
-#endif
 
 QABORT:        if (POP()) { _ABORT(); }                              NEXT;
 
