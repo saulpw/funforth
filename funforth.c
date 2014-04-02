@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-typedef long _t; // sizeof(_t) >= sizeof(word_hdr_t *); must be signed also
+typedef signed long _t;
 
 #define STACK_SIZE 32
 #define DICT_SIZE 8192
@@ -36,16 +36,17 @@ typedef struct word_hdr_t
     _t body[];
 } word_hdr_t;
 
-// global data
+// global data for all threads
 // ==============================
+      char         dict[DICT_SIZE];
+const word_hdr_t * builtin_words;    // words[] for global access with XT()
+
+
+//struct user {
       _t           parmstack[STACK_SIZE];
       void *       retstack[STACK_SIZE];
-      char         dict[DICT_SIZE];
 
-#define XT(CTOK) (&builtin_words[XTI_##CTOK])
-const word_hdr_t * builtin_words;    // words[] for global access
-
-      void **      exc_frame;        // for TRY/THROW/CATCH/FINALLY
+      void **      exc_frame;        // saved RP for TRY/THROW/CATCH/FINALLY
 
 // registers
 // ------------------------------
@@ -62,30 +63,38 @@ const word_hdr_t *  WP = NULL;       // Word Pointer
 
       int           STATE = 0;       // 0 is interpret, 1 is compile mode
 // ===============================
+//};
 
-int  _ABORT(void);
-void _COMMA(_t val)  { *(_t *) DP = val; DP += sizeof(_t); }
-void _PUSH(_t v)     { *++SP = TOS; TOS = (v); }
-void _RPUSH(void *v) { *++RP = v; }
-   _t POP()          { _t r = TOS; TOS = *SP--; return r; }
-void *RPOP()         { return *RP--; }
+void  _PUSH(_t v)     { *++SP = TOS; TOS = (v); }
+_t     POP()          { _t r = TOS; TOS = *SP--; return r; }
+
+void  _RPUSH(void *v) { *++RP = v; }
+void * RPOP()         { return *RP--; }
+
+void  _COMMA(_t val)  { *(_t *) DP = val; DP += sizeof(_t); }
+int   _ABORT(void);
 
 #define PUSH(v)  _PUSH((_t) (v))
 #define RPUSH(v) _RPUSH((void *) (v))
 #define COMMA(v) _COMMA((_t) (v))
 #define ABORT(MSG) do { PUSH(MSG); _ABORT(); } while (0)
 
+#define XT(CTOK) (&builtin_words[XTI_##CTOK])
+
 int main()
 {
+    assert(sizeof(_t) == sizeof(void *));
+
     // the dictionary of builtins
     static const word_hdr_t words[] = {
 #define N(IMMED, CTOK, FORTHNAME, C_CODE)                 \
-        [XTI_##CTOK] = {  .name = FORTHNAME,              \
+        [XTI_##CTOK] = {                                  \
+            .name = FORTHNAME,                            \
             .codeptr = &&CTOK,                            \
             .immed = IMMED,                               \
             .do_does = 0,                                 \
-            .prev = ((XTI_##CTOK+1 == XTI_MAX) ? NULL :   \
-                    (word_hdr_t *) &words[XTI_##CTOK+1]), \
+            .prev = ((XTI_##CTOK == 0) ? NULL :           \
+                    (word_hdr_t *) &words[XTI_##CTOK-1]), \
         },
 
 #include "words.inc"
@@ -93,7 +102,7 @@ int main()
     };
 
     builtin_words = words;
-    LATEST = (word_hdr_t *) words;
+    LATEST = (word_hdr_t *) &words[XTI_MAX-1];
 
     _t acc;
 
@@ -111,7 +120,6 @@ _NEXT:
  
 DO_WORD: // for EXECUTE to goto
     DPRINTF("\n%s '%s'", (STATE == 1) ? "(compile)" : "(interpret)", WP->name);
-//    PRINTSTACK();
 
     if (WP->do_does) {
         PUSH(WP->body);
@@ -128,24 +136,25 @@ DO_WORD: // for EXECUTE to goto
 
 INTERPRET_WORD:
     PUSH(BLANK_CHAR);
-    WORD();
-    FIND();
-    if (TOS == 0) { // not found, try to convert to number
-        POP();      // discard FIND flag
-        NUMBER();
-        if (STATE == 1) {
-            goto LITERAL;
+    WORD();         // tokenize the next word from the input stream
+    FIND();         // try to look it up in the dictionary
+
+    if (TOS == 0) { // if not found
+        POP();      //   (discard FIND flag)
+        NUMBER();   //   convert to number
+        if (STATE == 1) {   // in compile-mode,
+            goto LITERAL;   //   push the number as a literal at runtime
         }
         NEXT;
-    } else if (POP() > 0) { //  not-immediate
-        if (STATE == 1) {
-            goto COMMA;
+    } else if (POP() < 0) { // if it's an immediate word (FIND returned -1)
+        goto EXECUTE;       //   execute regardless
+    } else {                // otherwise
+        if (STATE == 1) {   // if in compile-mode,
+            goto COMMA;     //   append this word's xt to the dictionary
+        } else {
+            goto EXECUTE;   // in interpret mode, execute now
         }
     }
-
-    // EXECUTE immediately if TOS <0 or if STATE != COMPILE_MODE
-    goto EXECUTE;
-
 }
 
 int _ABORT(void)
@@ -180,7 +189,7 @@ int WORD() // ( delimiter_char -- token_ptr )
     *tmp = 0;
     if (tmp == HP) { // empty word
         DPRINTF("[eof]\n");
-        exit(0);
+        exit(-1);
     }
     DPRINTF("\n\t\tWORD>     %s", HP);
 }
@@ -208,7 +217,7 @@ const word_hdr_t *_FIND(const char *name)
     const word_hdr_t *w;
 
     for (w=LATEST; w; w = w->prev) {
-        if (strcmp(name, w->name) == 0) {
+        if (strcasecmp(name, w->name) == 0) {
             return w;
         }
     }
@@ -243,32 +252,37 @@ int PRINTSTACK(void)
     for (rptr = RP; rptr > retstack; --rptr) {
         printf("\n  RP[%d] %p", (int) (rptr - retstack - 1), *rptr);
     }
-
 }
 
-int PRINTDICT(void)
+int WORDS(void)
 {
-    printf("\n");
     const word_hdr_t *def;
+    for (def = LATEST; def; def = def->prev) {
+        printf("%s ", def->name);
+    }
+}
 
-    for (def = LATEST; def != XT(DO_ENTER); def = def->prev) {
-        printf(":VERBATIM %s ", def->name);
+int PRINTWORD(void)
+{
+    const word_hdr_t *def = (const word_hdr_t *) POP();
 
-        if (def->codeptr == XT(DO_ENTER)->codeptr) {
-          const word_hdr_t **w;
-          for (w = (const word_hdr_t **) def->body; *w != XT(DO_EXIT); ++w) {
+    printf("\n:VERBATIM %s ", def->name);
+
+    if (def->codeptr == XT(DO_ENTER)->codeptr) {
+        const word_hdr_t **w;
+        for (w = (const word_hdr_t **) def->body; *w != XT(DO_EXIT); ++w) {
             printf(" %s", (*w)->name);
             if (*w == XT(DO_BRANCH) ||
                 *w == XT(DO_BRANCHZ) ||
                 *w == XT(DO_TRY) ||
                 *w == XT(DO_LITERAL)) {
                 ++w;
-                printf("(%d) ", *(int *) w);
+                printf("(%d)", *(int *) w);
             }
-          }
         }
-        printf(" ; \n");
     }
+
+    printf(" ;%s ", def->immed ? " IMMEDIATE" : "");
 }
 
 char input[] =
@@ -282,6 +296,7 @@ char input[] =
 " : CELLS cellsize * ;"  // for '2 CELLS ALLOT' allocation notation
 " : BL 32 ;"             // 32 == ' ' must match BLANK_CHAR
 " : ( 41 WORD DROP ; IMMEDIATE"  // ( inline comments )  41 == ')'
+" : .\"  34 WORD TYPE ;"
 " : OFFSET   - cellsize / 1 - ;" // ( &ptr[a] &ptr[b] -- a-b )
 
 //  ' (TICK)   ( -- xt )   quotes the next word in the input stream
@@ -332,6 +347,8 @@ char input[] =
 " : CATCH    POSTPONE (CATCH) POSTPONE (BRANCH) >MARK SWAP >RESOLVE ; IMMEDIATE"
 " : FINALLY  >RESOLVE ; IMMEDIATE"
 
+" : SEE  ' .W ;" // SEE WORD  to show the definition of a word
+
 // some tests
 " : pass      42 . ;"
 " : fail      -1 . ;"
@@ -343,6 +360,6 @@ char input[] =
 " : testexc   TRY pass CATCH fail FINALLY pass"
 "             TRY raise fail CATCH pass FINALLY pass ;"
 
-" testif testuntil testdoloop testexc"
+" WORDS SEE try testif testuntil testdoloop testexc BYE"
 ;
 

@@ -12,6 +12,10 @@ N(0,DO_BRANCHZ,  "(BRANCHZ)",  acc = (_t) *IP++; if (! POP()) { IP += acc; }  )
 
 N(0,EQ0,         "0=",         TOS = (TOS == 0)                               )
 N(0,EQ,          "=",          TOS = (*SP-- == TOS)                           )
+N(0,GTEQ,        ">=",         TOS = (*SP-- >= TOS)                           )
+N(0,LTEQ,        "<=",         TOS = (*SP-- <= TOS)                           )
+N(0,LT,          "<",          TOS = (*SP-- <  TOS)                           )
+N(0,GT,          ">",          TOS = (*SP-- >  TOS)                           )
 
 N(0,ADD,         "+",          TOS = *SP-- + TOS                              )
 N(0,SUB,         "-",          TOS = *SP-- - TOS                              )
@@ -101,7 +105,7 @@ N(1,COMPILETICK, "[']",        PUSH(BLANK_CHAR);
 
 // DOES> sets it up so that the defined compiler word includes an action, which
 // is used for the words it creates at runtime.
-N(1,META_DOES,  "DOES>",       COMMA((_t) XT(DOES))                           )
+N(1,META_DOES,  "DOES>",       COMMA((_t) XT(DOES))  )
 N(0,DOES,       "(DOES>)",     LATEST->do_does = 1;
                                LATEST->codeptr = (void *) IP;
                                goto DO_EXIT
@@ -124,16 +128,18 @@ N(0,THROW,      "THROW",       RP = exc_frame;
                                SP = RPOP();
                            )
 
-N(0,PRINT,       ".",          printf("%d ", (int) POP())                     )
-N(0,TYPE,        "TYPE",       printf("%s", (const char *) POP())             )
-N(0,EMIT,        "EMIT",       printf("%c", (char) POP())                     )
+N(0,PRINT,       ".",          printf("%d ", (int) POP())  )
+N(0,TYPE,        "TYPE",       puts((const char *) POP())  )
+N(0,EMIT,        "EMIT",       putchar((char) POP())       )
+N(0,BYE,         "BYE",        exit(0)                     )
 
 #define C(CTOK, FTOK) N(0, CTOK, FTOK, CTOK())
 C(_ABORT,      "ABORT" )
 C(NUMBER,      "NUMBER")
 C(FIND,        "FIND"  )
 C(WORD,        "WORD"  )
+C(WORDS,       "WORDS" )
 C(PRINTSTACK,  ".S"    )
-C(PRINTDICT,   ".DICT" )
+C(PRINTWORD,   ".W" )
 #undef C
 
