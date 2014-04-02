@@ -18,11 +18,7 @@ int main()
 ;
 
     user_t user;
-    int r;
     
-    if ((r = engine(&user, kernel)) < 0) return r;
-    if ((r = engine(&user, tests)) < 0) return r;
-
-    return 0;
+    return engine(&user, tests);
 }
 

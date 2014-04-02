@@ -51,6 +51,7 @@ int engine(user_t *u, const char *input)
     if (LATEST == NULL) {  // first time only initialization
         LATEST = (word_hdr_t *) &words[XTI_MAX-1];
         builtin_words = words; // will be the same for every thread anyway
+        if (engine(u, kernel) < 0) return -1;
     }
 
     STATE = 0;
