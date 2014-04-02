@@ -18,13 +18,13 @@ typedef signed long _t;
 
 // xti = index into builtin_words[].  builtin_words[xti] == a valid xt
 enum {
-#define N(IMMED, CTOK, FORTHNAME, C_CODE)  XTI_##CTOK,
+#define F(F_CODE) // and leave in place until the end of the file
+#define N(I, CTOK, F, C)  XTI_##CTOK,
 #include "words.inc"
 #undef N
         XTI_MAX
 };
 
-char input[];
 
 typedef struct word_hdr_t
 {
@@ -40,77 +40,92 @@ typedef struct word_hdr_t
 // ==============================
       char         dict[DICT_SIZE];
 const word_hdr_t * builtin_words;    // words[] for global access with XT()
+      word_hdr_t * LATEST = NULL;    // most recently defined Forth word
+      char        *DP = dict;        // Dictionary Pointer
 
-
-//struct user {
+typedef struct user_t {
       _t           parmstack[STACK_SIZE];
       void *       retstack[STACK_SIZE];
 
-      void **      exc_frame;        // saved RP for TRY/THROW/CATCH/FINALLY
+      void **      _FRAME;        // saved RP for TRY/THROW/CATCH/FINALLY
+      int          _STATE;        // 0 is interpret, 1 is compile mode
 
-// registers
-// ------------------------------
-      _t           TOS = 0;          // Top Of parameter Stack
-      _t           *SP = parmstack;  // parameter Stack Pointer
-      void *       *RP = retstack;   // Return stack Pointer
-const word_hdr_t * *IP = NULL;       // Instruction Pointer
-const char         *CP = input;      // Character Pointer (input stream)
-const word_hdr_t *  WP = NULL;       // Word Pointer
 
-      char         *DP = dict;       // Dictionary Pointer
+      _t           _TOS;          // Top Of parameter Stack
+      _t           *_SP;          // parameter Stack Pointer
+      void *       *_RP;          // Return stack Pointer
+const word_hdr_t * *_IP;          // Instruction Pointer
+const char         *_CP;          // Character Pointer (input stream)
+const word_hdr_t *  _WP;          // Word Pointer
 
-      word_hdr_t *  LATEST = NULL;   // most recently defined Forth word
+} user_t;
 
-      int           STATE = 0;       // 0 is interpret, 1 is compile mode
-// ===============================
-//};
 
-void  _PUSH(_t v)     { *++SP = TOS; TOS = (v); }
-_t     POP()          { _t r = TOS; TOS = *SP--; return r; }
+#define TOS u->_TOS
+#define SP u->_SP
+#define RP u->_RP
+#define IP u->_IP
+#define CP u->_CP
+#define WP u->_WP
+#define STATE u->_STATE
+#define FRAME u->_FRAME
 
-void  _RPUSH(void *v) { *++RP = v; }
-void * RPOP()         { return *RP--; }
+void  _PUSH(user_t *u, _t v)     { *++SP = TOS; TOS = (v); }
+_t    _POP(user_t *u)            { _t r = TOS; TOS = *SP--; return r; }
+
+void  _RPUSH(user_t *u, void *v) { *++RP = v; }
+void *_RPOP(user_t *u)           { return *RP--; }
 
 void  _COMMA(_t val)  { *(_t *) DP = val; DP += sizeof(_t); }
-int   _ABORT(void);
+int   _ABORT(user_t *u);
 
-#define PUSH(v)  _PUSH((_t) (v))
-#define RPUSH(v) _RPUSH((void *) (v))
+#define PUSH(v)  _PUSH(u, (_t) (v))
+#define POP(v)   _POP(u)
+#define RPUSH(v) _RPUSH(u, (void *) (v))
+#define RPOP(v)  _RPOP(u)
 #define COMMA(v) _COMMA((_t) (v))
-#define ABORT(MSG) do { PUSH(MSG); _ABORT(); } while (0)
+#define ABORT(MSG) do { PUSH(MSG); return _ABORT(u); } while (0)
 
 #define XT(CTOK) (&builtin_words[XTI_##CTOK])
 
-int main()
+int engine(user_t *u, const char *input)
 {
-    assert(sizeof(_t) == sizeof(void *));
-
-    // the dictionary of builtins
+    // the dictionary of builtins must be inside the function with the C labels
     static const word_hdr_t words[] = {
-#define N(IMMED, CTOK, FORTHNAME, C_CODE)                 \
+#define N(IMMED, CTOK, FNAME, C_CODE)                 \
         [XTI_##CTOK] = {                                  \
-            .name = FORTHNAME,                            \
+            .name = FNAME,                            \
             .codeptr = &&CTOK,                            \
             .immed = IMMED,                               \
             .do_does = 0,                                 \
             .prev = ((XTI_##CTOK == 0) ? NULL :           \
                     (word_hdr_t *) &words[XTI_##CTOK-1]), \
         },
-
 #include "words.inc"
 #undef N
     };
 
-    builtin_words = words;
-    LATEST = (word_hdr_t *) &words[XTI_MAX-1];
+    if (LATEST == NULL) {  // first time only initialization
+        LATEST = (word_hdr_t *) &words[XTI_MAX-1];
+        builtin_words = words; // will be the same for every thread anyway
+    }
+
+    STATE = 0;
+    TOS = 0;
+    SP = u->parmstack;
+    RP = u->retstack;
+    IP = NULL;
+    WP = NULL;
+
+    CP = input;
 
     _t acc;
 
 CHECK_STATE:
-    if (SP - parmstack < 0)           { ABORT("data stack underflow"); }
-    if (SP - parmstack >= STACK_SIZE) { ABORT("data stack overflow"); }
-    if (RP - retstack < 0)           { ABORT("return stack underflow"); }
-    if (RP - retstack >= STACK_SIZE) { ABORT("return stack overflow"); }
+    if (SP - u->parmstack < 0)           { ABORT("data stack underflow"); }
+    if (SP - u->parmstack >= STACK_SIZE) { ABORT("data stack overflow"); }
+    if (RP - u->retstack < 0)            { ABORT("return stack underflow"); }
+    if (RP - u->retstack >= STACK_SIZE)  { ABORT("return stack overflow"); }
 
     if (IP == NULL) { goto INTERPRET_WORD; }
 
@@ -130,48 +145,47 @@ DO_WORD: // for EXECUTE to goto
 
     goto *(WP->codeptr); // native word
 
-#define N(I, CTOK, FORTHNAME, C_CODE) CTOK: C_CODE; NEXT;
+#define N(I, CTOK, FNAME, C_CODE) CTOK: C_CODE; NEXT;
 #include "words.inc"
 #undef N
 
 INTERPRET_WORD:
     PUSH(BLANK_CHAR);
-    WORD();         // tokenize the next word from the input stream
-    FIND();         // try to look it up in the dictionary
+    WORD(u);         // tokenize the next word from the input stream
+    FIND(u);         // try to look it up in the dictionary
 
-    if (TOS == 0) { // if not found
-        POP();      //   (discard FIND flag)
-        NUMBER();   //   convert to number
+    if (TOS == 0) {         // if word was not found
+        POP();              //   (discard FIND flag)
+        NUMBER(u);       //   convert to number.
         if (STATE == 1) {   // in compile-mode,
             goto LITERAL;   //   push the number as a literal at runtime
-        }
+        }                   // in interpret mode, it just stays on the stack
         NEXT;
-    } else if (POP() < 0) { // if it's an immediate word (FIND returned -1)
+    } else if (POP() < 0) { // if word is an immediate word
         goto EXECUTE;       //   execute regardless
-    } else {                // otherwise
-        if (STATE == 1) {   // if in compile-mode,
-            goto COMMA;     //   append this word's xt to the dictionary
+    } else {                // otherwise for non-immediate words
+        if (STATE == 1) {   //    if in compile-mode,
+            goto COMMA;     //      append this word's xt to the dictionary
         } else {
-            goto EXECUTE;   // in interpret mode, execute now
+            goto EXECUTE;   //    in interpret mode, execute now
         }
     }
 }
 
-int _ABORT(void)
+int _ABORT(user_t *u)
 {
     printf("ABORT: %s\n", (const char *) POP());
 
-    PRINTSTACK();
+    PRINTSTACK(u);
 
-    abort();
+    return -1;
 }
-
 
 // WORD skips leading whitespace, copies the next token from the input stream
 // (CP) into a local static buffer, and pushes that valid asciiz char* onto the
 // stack.
 
-int WORD() // ( delimiter_char -- token_ptr )
+int WORD(user_t *u) // ( delimiter_char -- token_ptr )
 {
     static char HP[128];
     char delim = POP();
@@ -189,15 +203,16 @@ int WORD() // ( delimiter_char -- token_ptr )
     *tmp = 0;
     if (tmp == HP) { // empty word
         DPRINTF("[eof]\n");
-        exit(-1);
+        return 0;
     }
     DPRINTF("\n\t\tWORD>     %s", HP);
+    return 1;
 }
 
 // NUMBER tries to convert the char* on the stack to an integer, ABORTing
 // if it fails.
 
-int NUMBER()  // ( token_ptr -- int )
+int NUMBER(user_t *u)  // ( token_ptr -- int )
 {
     char *endptr = NULL;
     const char *s = (const char *) TOS;
@@ -206,11 +221,6 @@ int NUMBER()  // ( token_ptr -- int )
         ABORT(s);
     }
 }
-
-// FIND looks in the dictionary for the char* on the stack.  If
-// found, leaves the word_ptr* and a 1 or -1 on top.
-
-// ( token_ptr -- token_ptr 0 | word_ptr 1 | immed_word_ptr -1 )
 
 const word_hdr_t *_FIND(const char *name)
 {
@@ -225,7 +235,12 @@ const word_hdr_t *_FIND(const char *name)
     return NULL;
 }
 
-int FIND()
+// FIND looks in the dictionary for the char* on the stack.  If
+// found, leaves the word_ptr* and a 1 or -1 on top.
+
+// ( token_ptr -- token_ptr 0 | word_ptr 1 | immed_word_ptr -1 )
+
+int FIND(user_t *u)
 {
     const word_hdr_t *w = _FIND((const char *) TOS);
 
@@ -237,32 +252,37 @@ int FIND()
         TOS = (_t) w;
         PUSH(w->immed ? -1 : 1);
     }
+
+    return 1;
 }
 
-int PRINTSTACK(void)
+int PRINTSTACK(user_t *u)
 {
-    printf("\n    [%d] %d", (int) (SP - parmstack), (int) TOS);
+    printf("\n    [%d] %d", (int) (SP - u->parmstack), (int) TOS);
 
     _t *ptr = SP;
-    for (ptr = SP; ptr > parmstack; --ptr) {
-        printf("\n    [%d] %d", (int) (ptr - parmstack - 1), (int) *ptr);
+    for (ptr = SP; ptr > u->parmstack; --ptr) {
+        printf("\n    [%d] %d", (int) (ptr - u->parmstack - 1), (int) *ptr);
     }
 
     void **rptr;
-    for (rptr = RP; rptr > retstack; --rptr) {
-        printf("\n  RP[%d] %p", (int) (rptr - retstack - 1), *rptr);
+    for (rptr = RP; rptr > u->retstack; --rptr) {
+        printf("\n  RP[%d] %p", (int) (rptr - u->retstack - 1), *rptr);
     }
+
+    return 1;
 }
 
-int WORDS(void)
+int WORDS(user_t *u)
 {
     const word_hdr_t *def;
     for (def = LATEST; def; def = def->prev) {
         printf("%s ", def->name);
     }
+    return 1;
 }
 
-int PRINTWORD(void)
+int PRINTWORD(user_t *u)
 {
     const word_hdr_t *def = (const word_hdr_t *) POP();
 
@@ -283,71 +303,19 @@ int PRINTWORD(void)
     }
 
     printf(" ;%s ", def->immed ? " IMMEDIATE" : "");
+    return 1;
 }
 
-char input[] =
-" : 2DUP  OVER OVER ;"  // ( a b -- a b a b )
-" : 2DROP DROP DROP ;" // ( a b -- )
+int main()
+{
+    assert(sizeof(_t) == sizeof(void *));
 
-" : CONSTANT   CREATE , DOES> @ ; IMMEDIATE"
-" : VARIABLE   CREATE 0 , DOES> ; IMMEDIATE"
+    char boot_input[] =
 
-" 8 CONSTANT cellsize"   // cellsize == sizeof(_t)
-" : CELLS cellsize * ;"  // for '2 CELLS ALLOT' allocation notation
-" : BL 32 ;"             // 32 == ' ' must match BLANK_CHAR
-" : ( 41 WORD DROP ; IMMEDIATE"  // ( inline comments )  41 == ')'
-" : .\"  34 WORD TYPE ;"
-" : OFFSET   - cellsize / 1 - ;" // ( &ptr[a] &ptr[b] -- a-b )
-
-//  ' (TICK)   ( -- xt )   quotes the next word in the input stream
-" : '    BL WORD FIND 0= ?ABORT ;"
-
-/*
- * POSTPONE is used in the definition of a compile (immediate) word W.  It
- * reads the next token T at W compile time; then it is in W's run-time
- * execution stream.
-   : POSTPONE     \ POSTPONE is used in the compilation of another word
-        '         \ it gets the xt of the succeeding token,
-        LITERAL   \ compiles it as a compile-time literal,
-        ['] ,     \ pushes the xt of the comma-compile word
-        ,         \ compile , into the current definition
-   ; IMMEDIATE
- */
-" : POSTPONE  ' LITERAL ['] , , ; IMMEDIATE"
-
-    /*  >MARK    ( -- &src_ip )  holds a slot for a forward branch offset.
-     *                           use immediately after a POSTPONE (BRANCH*)
-     *  >RESOLVE ( &src_ip -- )  fills the formerly >MARKed slot with the delta
-     *  <MARK    ( -- &tgt_ip )  saves a branch target for <RESOLVE
-     *  <RESOLVE ( &tgt_ip -- )  fills HERE with the <MARKed target.
-                                 use immediately after a POSTPONE (BRANCH*)
-     */
-
-" : >MARK     HERE  1 CELLS ALLOT ;"
-" : >RESOLVE  HERE OVER OFFSET SWAP ! ;"
-" : <MARK     HERE ;"
-" : <RESOLVE  HERE OFFSET , ;"
-
-// BEGIN/AGAIN/UNTIL are straight-forward
-" : BEGIN  <MARK ; IMMEDIATE"
-" : AGAIN  POSTPONE (BRANCH) <RESOLVE ; IMMEDIATE"
-" : UNTIL  POSTPONE (BRANCHZ) <RESOLVE ; IMMEDIATE"
-
-// as are IF/ELSE/THEN
-" : IF    POSTPONE (BRANCHZ) >MARK ; IMMEDIATE"
-" : ELSE  POSTPONE (BRANCH)  >MARK SWAP >RESOLVE ; IMMEDIATE"
-" : THEN  >RESOLVE ; IMMEDIATE"
-
-//  DO/LOOP stores the loop counter and limit on the return stack
-" : DO    POSTPONE 2>R <MARK ; IMMEDIATE"
-" : LOOP  POSTPONE (LOOP) POSTPONE (BRANCHZ) <RESOLVE POSTPONE 2RDROP ; IMMEDIATE"
-
-// TRY creates an exception frame on the return stack
-" : TRY      POSTPONE (TRY)  >MARK ; IMMEDIATE"
-" : CATCH    POSTPONE (CATCH) POSTPONE (BRANCH) >MARK SWAP >RESOLVE ; IMMEDIATE"
-" : FINALLY  >RESOLVE ; IMMEDIATE"
-
-" : SEE  ' .W ;" // SEE WORD  to show the definition of a word
+#undef F
+#define F(F_CODE) F_CODE " " // extra space as a courtesy to successive F()s
+#define N(I, C, F, C_)
+#include "words.inc"
 
 // some tests
 " : pass      42 . ;"
@@ -356,10 +324,14 @@ char input[] =
 " : testinfloop  1 BEGIN DUP . 1 + AGAIN ;"
 " : testuntil    1 BEGIN DUP . 1 + DUP 10 = UNTIL ;"
 " : testdoloop  10 0 DO I . LOOP ;"
-" : raise     THROW fail ;"
+" : raise     -1 THROW fail ;"
 " : testexc   TRY pass CATCH fail FINALLY pass"
 "             TRY raise fail CATCH pass FINALLY pass ;"
 
 " WORDS SEE try testif testuntil testdoloop testexc BYE"
 ;
+
+    user_t user;
+    engine(&user, boot_input);
+}
 
