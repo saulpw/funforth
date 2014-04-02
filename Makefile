@@ -9,14 +9,14 @@ endif
 
 all: test funforth.s
 
-funforth: funforth.c
+funforth: funforth.c words.inc
 	gcc $(CFLAGS) $< -o $@
 
 test: funforth
 	./funforth
 
 %.s: %.c
-	gcc $(CFLAGS) -S $< -o $@
+	gcc -O3 -S $< -o $@
 
 clean:
 	rm -f funforth funforth.s
