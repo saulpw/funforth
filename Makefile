@@ -2,15 +2,15 @@
 CFLAGS= -ggdb 
 
 ifdef DEBUG
-CFLAGS+= -DDEBUG
+CFLAGS += -DDEBUG
 else
-CFLAGS+= -O3
+CFLAGS += -O3
 endif
 
 all: test funforth.s
 
-funforth: funforth.c words.inc
-	gcc $(CFLAGS) $< -o $@
+funforth: funforth.o main.o | words.inc
+	gcc $^ -o $@
 
 test: funforth
 	./funforth
@@ -19,4 +19,4 @@ test: funforth
 	gcc -O3 -S $< -o $@
 
 clean:
-	rm -f funforth funforth.s
+	rm -f funforth funforth.s *.o
