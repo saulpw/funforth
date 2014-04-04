@@ -9,8 +9,6 @@ N(0,ALIGN,    "ALIGN",   ( -- ),       acc = (_t) DP & (sizeof(_t)-1);
                                        if (acc) DP += sizeof(_t) - acc        )
 N(0,ALIGNED,  "ALIGNED", ( a -- b ),   acc = TOS & (sizeof(_t)-1); 
                                        if (acc) TOS += sizeof(_t) - acc       )
-N(0,COMMA,    ",",       ( n -- ),     COMMA(POP())                           )
-N(0,LITERAL,  "LITERAL", ( n -- ),     COMMA((_t) XT(DO_LITERAL)); COMMA(POP())   )
 N(0,IMMEDIATE,"IMMEDIATE", ( -- ),     LATEST->immed = 1                      )
 N(1,RECURSE,  "RECURSE", ( -- ),       COMMA((_t) LATEST)                     )
 N(1,CLRSTATE, "[",       ( -- ),       STATE = 0                              )

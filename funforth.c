@@ -15,6 +15,7 @@ const word_hdr_t * builtin_words;
 const char kernel[] =
 #define F(F_CODE) F_CODE " " // extra space as a courtesy to the next F()s
 #include "words.inc"
+    "" // in case there aren't any
     ;
 
 // builtin_words[xti] == a valid execution token (xt)
@@ -90,6 +91,12 @@ DO_WORD: // for EXECUTE to goto
     }
 
     goto *(WP->codeptr); // native word
+
+DO_DOES:
+    RPUSH(IP);
+    IP = WP->codeptr;
+    PUSH(WP->body);
+    NEXT;
 
 #define N(I, C_TOKEN, F, D, C_CODE) C_TOKEN: C_CODE; NEXT;
 #include "words.inc"

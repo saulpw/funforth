@@ -86,9 +86,6 @@ N(0,FILL,  "FILL", ( ptr n val -- ), memset((void *) SP[-1], SP[0], TOS);       
 N(0,MOVE,  "MOVE", ( src dst n -- ), memmove((void *) SP[0], (const void *) SP[-1], TOS); SP -= 2; POP() )
 
 // internal words
-N(0,DO_DOES, "DO_DOES", (R: -- ip ), RPUSH(IP);
-                                     IP = WP->codeptr;
-                                     PUSH(WP->body)                           )
 N(0,ENTER,   "ENTER",   (R: -- ip ), RPUSH(IP);
                                      IP = (const word_hdr_t **) &WP->body     )
 N(0,EXIT,    "EXIT",    (R: ip -- ), IP = RPOP()                              )
@@ -150,6 +147,28 @@ N(0,CREATE, "CREATE", ( -- ), {
     LATEST = hdr;
 })
 
+N(0,INTERPRET_WORD, "", ( -- ),
+    PUSH(BLANK_CHAR);
+    if (WORD(u) <= 0) return 0; // tokenize the next word from the input stream
+    FIND(u);                // try to look it up in the dictionary
+
+    if (TOS == 0) {         // if word was not found
+        POP();              //   (discard FIND flag)
+        NUMBER(u);          //   convert to number.
+        if (STATE == 1) {   // in compile-mode,
+            goto LITERAL;   //   push the number as a literal at runtime
+        } else if (STATE == 2) { // in verbatim-mode,
+            goto COMMA;     // the literal gets compiled directly
+        }                   // in interpret mode, it just stays on the stack 
+        NEXT;
+    } else if (POP() > 0 && STATE) { // if compile-mode and not-immediate
+        goto COMMA;         //      append this word's xt to the dictionary
+    } else {
+        goto EXECUTE;       //   execute immediately otherwise
+    })
+
+N(0,LITERAL,  "LITERAL", ( n -- ), COMMA((_t) XT(DO_LITERAL)); COMMA(POP())   )
+N(0,COMMA,    ",",       ( n -- ),     COMMA(POP()) )
 
 #include "compiler.inc"
 #include "interpreter.inc"
