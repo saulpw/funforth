@@ -235,7 +235,7 @@ int PRINTWORD(user_t *u)
                 *w == XT(DO_TRY) ||
                 *w == XT(DO_LITERAL)) {
                 ++w;
-                printf("(%d)", *(int *) w);
+                printf(" %d", *(int *) w);
             }
         }
     }
