@@ -8,6 +8,9 @@
 #define F(FORTH_CODE)
 #endif
 
+#define C(CTOK, FTOK, STACK_COMMENT) \
+    N(0, CTOK, FTOK, STACK_COMMENT, if ((acc = CTOK(u)) <= 0) return acc)
+
 // arithmetic
 N(0,INCR,   "1+",     ( a -- a+1 ),      ++TOS                  )
 N(0,DECR,   "1-",     ( a -- a-1 ),      --TOS                  )
@@ -83,6 +86,9 @@ N(0,FILL,  "FILL", ( ptr n val -- ), memset((void *) SP[-1], SP[0], TOS);       
 N(0,MOVE,  "MOVE", ( src dst n -- ), memmove((void *) SP[0], (const void *) SP[-1], TOS); SP -= 2; POP() )
 
 // internal words
+N(0,DO_DOES, "DO_DOES", (R: -- ip ), RPUSH(IP);
+                                     IP = WP->codeptr;
+                                     PUSH(WP->body)                           )
 N(0,ENTER,   "ENTER",   (R: -- ip ), RPUSH(IP);
                                      IP = (const word_hdr_t **) &WP->body     )
 N(0,EXIT,    "EXIT",    (R: ip -- ), IP = RPOP()                              )
@@ -90,7 +96,7 @@ N(0,EXECUTE, "EXECUTE", ( xt -- ),   WP = (word_hdr_t *) POP(); goto DO_WORD  )
 N(0,BRANCH, "(BRANCH)", ( -- ),      acc = (_t) *IP++; IP += acc;             )
 N(0,BRANCHZ,"(BRANCHZ)",( fl -- ),   acc = (_t) *IP++; if (!POP()) IP += acc  )
 
-N(0,DO_LIT,      "(LITERAL)",  ( -- k ),    PUSH(*IP++)                   )
+N(0,DO_LITERAL,  "(LITERAL)",  ( -- k ),    PUSH(*IP++)                   )
 N(0,DO_CONSTANT, "(CONSTANT)", ( -- k ),    PUSH(*(const _t *) &WP->body) )
 N(0,DO_VARIABLE, "(VARIABLE)", ( -- &v ),   PUSH(&WP->body)               )
 
@@ -98,33 +104,56 @@ N(0,DO_VARIABLE, "(VARIABLE)", ( -- &v ),   PUSH(&WP->body)               )
 N(0,DO_LOOP, "(LOOPINC)", (R: n i -- n i+1 ) (S: -- i==n ), PUSH(++RP[0] == RP[-1]) )
 N(0,I,       "I",         (R: n i -- n i )   (S:  -- i ),   PUSH(RP[0])              ) 
 
-// interpreter words
-N(0,PRINT,     ".",      ( i -- ),    printf("%d ", (int) POP())  )
-N(0,TYPE,      "TYPE",   ( str -- ),  puts((const char *) POP())  )
-N(0,EMIT,      "EMIT",   ( ch -- ),   putchar((char) POP())       )
+
+N(0,DO_TRY,     "(TRY)", (R: -- sp exc_ip ebp ), acc = (_t) *IP++;
+                                                 RPUSH(SP);
+                                                 RPUSH(IP + acc);
+                                                 RPUSH(FRAME);
+                                                 FRAME = RP  )
+
+// UNTRY is at the end of every TRY clause, pops the exception frame 
+// and drops the exception handler IP and saved SP
+N(0,DO_UNTRY,   "(UNTRY)", (R: sp exc_ip ebp),   assert(FRAME != NULL);
+                                                 RP = FRAME;
+                                                 FRAME = RPOP();
+                                                 RP -= 2 )
+
+N(0,THROW,      "THROW",   ( exc -- ),           RP = FRAME;
+                                                 FRAME = RPOP();
+                                                 IP = RPOP(); 
+                                                 SP = RPOP()  )
+
 N(0,BYE,       "BYE",    ( -- ),      return 0                    )
 N(0,QABORT,    "?ABORT", ( flag -- ), if (POP()) ABORT("?ABORT")  )
-
-#define C(CTOK, FTOK, STACK_COMMENT) \
-    N(0, CTOK, FTOK, STACK_COMMENT, if ((acc = CTOK(u)) <= 0) return acc)
 
 C(_ABORT,      "ABORT",  ( -- )                        )
 C(NUMBER,      "NUMBER", ( str -- i )                  )
 C(FIND,        "FIND",   ( str -- xt|str  flag|0 )     )
-C(WORD,        "WORD",   ( ch -- str )                 )
 
-C(WORDS,       "WORDS",  ( -- )                        )
-C(PRINTSTACK,  ".S",     ( -- )                        )
-C(PRINTWORD,   ".W",     ( xt -- )                     )
+// the minimum necessary compiler words
+N(0,COLON,     ":",         ( -- ), STATE = 1; goto CREATE                 )
+N(0,VERBATIM,  ":VERBATIM", ( -- ), STATE = 2; goto CREATE                 )
+N(1,SEMICOLON, ";",         ( -- ), STATE = 0; COMMA((_t) XT(EXIT))        )
 
-#undef C
+// gets the next word from the input stream and adds a dictionary entry for it
+N(0,CREATE, "CREATE", ( -- ), {
+    PUSH(BLANK_CHAR);
+    WORD(u);
+
+    word_hdr_t * hdr = (word_hdr_t *) DP;
+    DP += sizeof(word_hdr_t);
+
+    strncpy(hdr->name, (const char *) POP(), sizeof(hdr->name));
+    hdr->do_does = 0;
+    hdr->codeptr = &&ENTER;
+    hdr->prev = LATEST;
+    LATEST = hdr;
+})
+
 
 #include "compiler.inc"
+#include "interpreter.inc"
 
-F(": CR  10 EMIT 13 EMIT ;")
-F(": SPACE  BL EMIT ;")
-F(": SPACES 0 DO SPACE LOOP ;") // 8 SPACES
-F(": SEE  ' .W ;") // SEE WORD  to show the definition of a word
-
+#undef C
 #undef N
 #undef F

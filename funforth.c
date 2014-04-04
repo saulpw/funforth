@@ -24,7 +24,7 @@ enum {
         NUM_BUILTINS
 };
 
-int engine(user_t *u, const char *input)
+int engine(user_t *u, const word_hdr_t *xt, const char *input)
 {
     assert(sizeof(_t) == sizeof(void *));
 
@@ -32,34 +32,43 @@ int engine(user_t *u, const char *input)
     //   The &&CTOK in codeptr is the target of the goto *(WP->codeptr) below.
     //     (note: gcc-extension)
     static const word_hdr_t words[] = {
-#define N(IMMED, C_TOKEN, FORTH_TOKEN, D, C_CODE)                     \
-        [XTI_##C_TOKEN] = {                                  \
-            .name = FORTH_TOKEN,                                \
-            .codeptr = &&C_TOKEN,                            \
+#define N(IMMED, CTOK, FORTHTOK, D, C_CODE)               \
+        [XTI_##CTOK] = {                                  \
+            .name = FORTHTOK,                             \
+            .codeptr = &&CTOK,                            \
             .immed = IMMED,                               \
             .do_does = 0,                                 \
-            .prev = ((XTI_##C_TOKEN == 0) ? NULL :           \
-                    (word_hdr_t *) &words[XTI_##C_TOKEN-1]), \
+            .prev = ((XTI_##CTOK == 0) ? NULL :           \
+                    (word_hdr_t *) &words[XTI_##CTOK-1]), \
         },
 #include "words.inc"
     };
 
-    if (LATEST == NULL) {  // first time only initialization
-        LATEST = (word_hdr_t *) &words[NUM_BUILTINS-1];
-        builtin_words = words; // will be the same for every thread anyway
-        if (engine(u, kernel) < 0) return -1;
-    }
+#define _XT(CTOK) ((_t) &words[XTI_##CTOK])
+    static const word_hdr_t f_QUIT = {
+            .name = "QUIT",
+            .body = { _XT(INTERPRET_WORD), _XT(BRANCH), -3 },
+            .codeptr = &&ENTER,
+            .prev = (word_hdr_t *) &words[NUM_BUILTINS-1]
+        };
 
-    STATE = 0;
-    TOS = 0;
-    SP = u->parmstack;
-    RP = u->retstack;
-    IP = NULL;
-    WP = NULL;
+    _t acc;
+
+    if (LATEST == NULL) {  // first time only initialization
+        LATEST = (word_hdr_t *) &f_QUIT;
+        builtin_words = words; // will be the same for every thread anyway
+        init_user(u);
+        if (engine(u, NULL, kernel) < 0) {
+            printf("kernel failed to load\n");
+            return -1;
+        }
+    }
 
     CP = input;
 
-    _t acc;
+    WP = xt ? xt : &f_QUIT;
+
+    goto DO_WORD;
 
 #define NEXT goto CHECK_STATE  // goto _NEXT in release
 
@@ -69,8 +78,6 @@ CHECK_STATE:
     if (RP - u->retstack < 0)            { ABORT("return stack underflow"); }
     if (RP - u->retstack >= STACK_SIZE)  { ABORT("return stack overflow"); }
 
-    if (IP == NULL) { goto INTERPRET_WORD; }
-
 _NEXT:    
     WP = *(const word_hdr_t **) IP++;
     // fall-through
@@ -79,47 +86,40 @@ DO_WORD: // for EXECUTE to goto
     DPRINTF("\n%s '%s'", (STATE == 1) ? "(compile)" : "(interpret)", WP->name);
 
     if (WP->do_does) {
-        RPUSH(IP);
-        IP = WP->codeptr;  // whereas in ENTER IP is set to &WP->body
-        PUSH(WP->body);
-        NEXT;
+        goto DO_DOES;
     }
 
     goto *(WP->codeptr); // native word
 
 #define N(I, C_TOKEN, F, D, C_CODE) C_TOKEN: C_CODE; NEXT;
 #include "words.inc"
+}
 
-INTERPRET_WORD:
-    PUSH(BLANK_CHAR);
-    if (WORD(u) <= 0) return 0; // tokenize the next word from the input stream
-    FIND(u);                // try to look it up in the dictionary
+void init_user(user_t *u)
+{
+    FRAME = NULL;
+    STATE = 0;
 
-    if (TOS == 0) {         // if word was not found
-        POP();              //   (discard FIND flag)
-        NUMBER(u);          //   convert to number.
-        if (STATE == 1) {   // in compile-mode,
-            goto LITERAL;   //   push the number as a literal at runtime
-        }                   // in interpret mode, it just stays on the stack
-        NEXT;
-    } else if (POP() < 0) { // if word is an immediate word
-        goto EXECUTE;       //   execute regardless
-    } else {                // otherwise for non-immediate words
-        if (STATE == 1) {   //    if in compile-mode,
-            goto COMMA;     //      append this word's xt to the dictionary
-        } else {
-            goto EXECUTE;   //    in interpret mode, execute now
-        }
-    }
+    TOS = 0;
+    SP = u->parmstack;
+    RP = u->retstack;
+    IP = NULL;
+    WP = NULL;
 }
 
 int _ABORT(user_t *u)
+{
+    init_user(u);
+    return -1;
+}
+
+int ABORTPRINT(user_t *u)
 {
     printf("ABORT: %s\n", (const char *) POP());
 
     PRINTSTACK(u);
 
-    return -1;
+    return _ABORT(u);
 }
 
 // WORD skips leading whitespace, copies the next token from the input stream
@@ -129,9 +129,10 @@ int _ABORT(user_t *u)
 int WORD(user_t *u) // ( delimiter_char -- token_ptr )
 {
     static char HP[128];
+
     char delim = POP();
+
     while (*CP && isspace(*CP)) CP++;
-    PUSH(HP);
     char *tmp = HP;
     char ch;
     while ((ch = *CP++)) {
@@ -146,7 +147,11 @@ int WORD(user_t *u) // ( delimiter_char -- token_ptr )
         DPRINTF("[eof]\n");
         return 0;
     }
+
+    PUSH(HP);
+
     DPRINTF("\n\t\tWORD>     %s", HP);
+
     return 1;
 }
 
@@ -161,6 +166,8 @@ int NUMBER(user_t *u)  // ( token_ptr -- int )
     if (s == endptr) { // actually if entire token isn't consumed
         ABORT(s);
     }
+
+    return 1;
 }
 
 // FIND looks in the dictionary for the char* on the stack.  If
@@ -226,7 +233,7 @@ int PRINTWORD(user_t *u)
             if (*w == XT(BRANCH) ||
                 *w == XT(BRANCHZ) ||
                 *w == XT(DO_TRY) ||
-                *w == XT(DO_LIT)) {
+                *w == XT(DO_LITERAL)) {
                 ++w;
                 printf("(%d)", *(int *) w);
             }

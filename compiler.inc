@@ -10,36 +10,19 @@ N(0,ALIGN,    "ALIGN",   ( -- ),       acc = (_t) DP & (sizeof(_t)-1);
 N(0,ALIGNED,  "ALIGNED", ( a -- b ),   acc = TOS & (sizeof(_t)-1); 
                                        if (acc) TOS += sizeof(_t) - acc       )
 N(0,COMMA,    ",",       ( n -- ),     COMMA(POP())                           )
-N(0,LITERAL,  "LITERAL", ( n -- ),     COMMA((_t) XT(DO_LIT)); COMMA(POP())   )
+N(0,LITERAL,  "LITERAL", ( n -- ),     COMMA((_t) XT(DO_LITERAL)); COMMA(POP())   )
 N(0,IMMEDIATE,"IMMEDIATE", ( -- ),     LATEST->immed = 1                      )
 N(1,RECURSE,  "RECURSE", ( -- ),       COMMA((_t) LATEST)                     )
 N(1,CLRSTATE, "[",       ( -- ),       STATE = 0                              )
 N(0,SETSTATE, "]",       ( -- ),       STATE = 1                              )
-N(1,SEMICOLON,";",       ( -- ),       STATE = 0; COMMA((_t) XT(EXIT))        )
-N(0,COLON,    ":",       ( -- ),       STATE = 1; goto CREATE;                )
-
-// gets the next word from the input stream and adds a dictionary entry for it
-N(0,CREATE, "CREATE", ( -- ), {
-    PUSH(BLANK_CHAR);
-    WORD(u);
-
-    word_hdr_t * hdr = (word_hdr_t *) DP;
-    DP += sizeof(word_hdr_t);
-
-    strncpy(hdr->name, (const char *) POP(), sizeof(hdr->name));
-    hdr->do_does = 0;
-    hdr->codeptr = &&ENTER;
-    hdr->prev = LATEST;
-    LATEST = hdr;
-})
 
 // DOES> sets it up so that the defined compiler word includes an action, which
 // is used for the words it creates at runtime.
-N(1,META_DOES,"DOES>", ( -- ),       COMMA((_t) XT(DOES))  )
-N(0,DOES,     "(DOES>)",  ( -- ),    LATEST->do_does = 1;
-                             LATEST->codeptr = (void *) IP;
-                             goto EXIT
-                           )
+N(1,META_DOES,"DOES>",   ( -- ),  COMMA((_t) XT(DOES))  )
+N(0,DOES,     "(DOES>)", ( -- ),  LATEST->do_does = 1;
+                                  LATEST->codeptr = (void *) IP;
+                                  goto EXIT )
+
 N(0,TO_BODY, ">BODY", ( xt -- ptr ), TOS = (_t) ((word_hdr_t *) TOS)->body   )
 
 // ( inline comments )  41 == ')'
@@ -107,19 +90,3 @@ F(": TRY   POSTPONE (TRY)  >MARK ; IMMEDIATE")
 F(": CATCH POSTPONE (UNTRY) POSTPONE (BRANCH) >MARK SWAP >RESOLVE ; IMMEDIATE")
 F(": FINALLY  >RESOLVE ; IMMEDIATE")
 
-N(0,DO_TRY,     "(TRY)", (R: -- sp exc_ip ebp ), acc = (_t) *IP++;
-                                                 RPUSH(SP);
-                                                 RPUSH(IP + acc);
-                                                 RPUSH(FRAME);
-                                                 FRAME = RP  )
-
-// UNTRY is at the end of every TRY clause, pops the exception frame 
-// and drops the exception handler IP and saved SP
-N(0,DO_UNTRY,   "(UNTRY)", (R: sp exc_ip ebp),   assert(FRAME != NULL);
-                                                 RP = FRAME;
-                                                 FRAME = RPOP();
-                                                 RP -= 2 )
-N(0,THROW,      "THROW", ( exc -- ),      RP = FRAME;
-                               FRAME = RPOP();
-                               IP = RPOP(); 
-                               SP = RPOP()  )

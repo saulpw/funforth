@@ -20,6 +20,6 @@ int main()
 
     user_t user;
     
-    return engine(&user, tests);
+    return engine(&user, 0, tests);
 }
 

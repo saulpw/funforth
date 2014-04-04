@@ -3,7 +3,11 @@
 
 typedef signed long _t;
 
-#define DPRINTF //printf
+#ifdef DEBUG
+#define DPRINTF printf
+#else
+#define DPRINTF
+#endif
 
 #define STACK_SIZE 32
 
@@ -65,14 +69,15 @@ INLINE void *_RPOP(user_t *u)           { return *RP--; }
 INLINE void  _COMMA(_t val)  { *(_t *) DP = val; DP += sizeof(_t); }
 extern int   _ABORT(user_t *u);
 
-extern int engine(user_t *u, const char *input);
+extern void init_user(user_t *u);
+extern int engine(user_t *u, const word_hdr_t *xt, const char *input);
 
 #define PUSH(v)  _PUSH(u, (_t) (v))
 #define POP(v)   _POP(u)
 #define RPUSH(v) _RPUSH(u, (void *) (v))
 #define RPOP(v)  _RPOP(u)
 #define COMMA(v) _COMMA((_t) (v))
-#define ABORT(MSG) do { PUSH(MSG); return _ABORT(u); } while (0)
+#define ABORT(MSG) do { PUSH(MSG); return ABORTPRINT(u); } while (0)
 
 #define XT(CTOK) (&builtin_words[XTI_##CTOK])
 
