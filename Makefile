@@ -1,5 +1,5 @@
 
-CFLAGS= -ggdb 
+CFLAGS= -ggdb -m32
 
 ifdef DEBUG
 CFLAGS += -DDEBUG
@@ -9,8 +9,11 @@ endif
 
 all: test funforth.s
 
-funforth: funforth.o main.o | words.inc
-	gcc $^ -o $@
+funforth.o: funforth.h words.inc compiler.inc
+main.o: funforth.h
+
+funforth: funforth.o main.o
+	gcc $(CFLAGS) $^ -o $@
 
 test: funforth
 	./funforth

@@ -8,48 +8,44 @@
 #define DICT_SIZE 8192
 
 char               dict[DICT_SIZE];
-const word_hdr_t * builtin_words;
-word_hdr_t *       LATEST = NULL;
 char *             DP = dict;
+word_hdr_t *       LATEST = NULL;
+const word_hdr_t * builtin_words;
 
 const char kernel[] =
 #define F(F_CODE) F_CODE " " // extra space as a courtesy to the next F()s
-#define N(I, C, F, C_)
 #include "words.inc"
-#undef N
-#undef F
     ;
 
 // builtin_words[xti] == a valid execution token (xt)
 enum {
-#define F(F_CODE) // and leave it inactive
-#define N(I, CTOK, F, C)  XTI_##CTOK,
+#define N(I, C_TOKEN, F, D, C)  XTI_##C_TOKEN,
 #include "words.inc"
-#undef N
-        XTI_MAX
+        NUM_BUILTINS
 };
 
 int engine(user_t *u, const char *input)
 {
     assert(sizeof(_t) == sizeof(void *));
 
-    // the dictionary of builtins must be inside the function with the C labels
+    // The dictionary of builtins must be inside the function with the C labels.
+    //   The &&CTOK in codeptr is the target of the goto *(WP->codeptr) below.
+    //     (note: gcc-extension)
     static const word_hdr_t words[] = {
-#define N(IMMED, CTOK, FNAME, C_CODE)                     \
-        [XTI_##CTOK] = {                                  \
-            .name = FNAME,                                \
-            .codeptr = &&CTOK,                            \
+#define N(IMMED, C_TOKEN, FORTH_TOKEN, D, C_CODE)                     \
+        [XTI_##C_TOKEN] = {                                  \
+            .name = FORTH_TOKEN,                                \
+            .codeptr = &&C_TOKEN,                            \
             .immed = IMMED,                               \
             .do_does = 0,                                 \
-            .prev = ((XTI_##CTOK == 0) ? NULL :           \
-                    (word_hdr_t *) &words[XTI_##CTOK-1]), \
+            .prev = ((XTI_##C_TOKEN == 0) ? NULL :           \
+                    (word_hdr_t *) &words[XTI_##C_TOKEN-1]), \
         },
 #include "words.inc"
-#undef N
     };
 
     if (LATEST == NULL) {  // first time only initialization
-        LATEST = (word_hdr_t *) &words[XTI_MAX-1];
+        LATEST = (word_hdr_t *) &words[NUM_BUILTINS-1];
         builtin_words = words; // will be the same for every thread anyway
         if (engine(u, kernel) < 0) return -1;
     }
@@ -83,17 +79,16 @@ DO_WORD: // for EXECUTE to goto
     DPRINTF("\n%s '%s'", (STATE == 1) ? "(compile)" : "(interpret)", WP->name);
 
     if (WP->do_does) {
-        PUSH(WP->body);
         RPUSH(IP);
-        IP = WP->codeptr;
+        IP = WP->codeptr;  // whereas in ENTER IP is set to &WP->body
+        PUSH(WP->body);
         NEXT;
     }
 
     goto *(WP->codeptr); // native word
 
-#define N(I, CTOK, FNAME, C_CODE) CTOK: C_CODE; NEXT;
+#define N(I, C_TOKEN, F, D, C_CODE) C_TOKEN: C_CODE; NEXT;
 #include "words.inc"
-#undef N
 
 INTERPRET_WORD:
     PUSH(BLANK_CHAR);
@@ -224,14 +219,14 @@ int PRINTWORD(user_t *u)
 
     printf("\n:VERBATIM %s ", def->name);
 
-    if (def->codeptr == XT(DO_ENTER)->codeptr) {
+    if (def->codeptr == XT(ENTER)->codeptr) {
         const word_hdr_t **w;
-        for (w = (const word_hdr_t **) def->body; *w != XT(DO_EXIT); ++w) {
+        for (w = (const word_hdr_t **) def->body; *w != XT(EXIT); ++w) {
             printf(" %s", (*w)->name);
-            if (*w == XT(DO_BRANCH) ||
-                *w == XT(DO_BRANCHZ) ||
+            if (*w == XT(BRANCH) ||
+                *w == XT(BRANCHZ) ||
                 *w == XT(DO_TRY) ||
-                *w == XT(DO_LITERAL)) {
+                *w == XT(DO_LIT)) {
                 ++w;
                 printf("(%d)", *(int *) w);
             }

@@ -22,26 +22,27 @@ typedef struct word_hdr_t
 // per-instance data
 typedef struct user_t
 {
-      _t           parmstack[STACK_SIZE];
-      void *       retstack[STACK_SIZE];
+          _t           parmstack[STACK_SIZE];
+          void *       retstack[STACK_SIZE];
 
-      void **      _FRAME;        // saved RP for TRY/THROW/CATCH/FINALLY
-      int          _STATE;        // 0 is interpret, 1 is compile mode
+          void **      _FRAME;     // saved RP for TRY/THROW/CATCH/FINALLY
+          int          _STATE;     // 0 is interpret, 1 is compile mode
 
-      _t           _TOS;          // Top Of parameter Stack
-      _t           *_SP;          // parameter Stack Pointer
-      void *       *_RP;          // Return stack Pointer
-const word_hdr_t * *_IP;          // Instruction Pointer
-const char         *_CP;          // Character Pointer (input stream)
-const word_hdr_t *  _WP;          // Word Pointer
+          _t           _TOS;       // Top Of parameter Stack
+          _t           *_SP;       // parameter Stack Pointer
+          void *       *_RP;       // Return stack Pointer
+    const word_hdr_t * *_IP;       // Instruction Pointer
+    const char         *_CP;       // Character Pointer (input stream)
+    const word_hdr_t *  _WP;       // Word Pointer
 } user_t;
 
 // global data for all threads/instances
 // ==============================
 extern       char         dict[];
-extern const word_hdr_t * builtin_words; // words[] for global access with XT()
-extern       word_hdr_t * LATEST;        // most recently defined Forth word
 extern       char        *DP;            // Dictionary Pointer
+extern       word_hdr_t * LATEST;        // most recently defined Forth word
+extern const word_hdr_t * builtin_words; // words[] for global access with XT()
+
 extern const char         kernel[];      // initial definitions
 
 #define TOS u->_TOS
